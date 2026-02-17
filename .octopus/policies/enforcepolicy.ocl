@@ -5,7 +5,11 @@ conditions {
     rego = <<-EOT
             package enforcepolicy
             
-            default result := {"allowed": true}
+            default result := {"allowed": false}
+            result := {"allowed": true} if {
+              some step in input.Steps
+              step.ActionType == "Octopus.Manual"
+            }
             EOT
 }
 
@@ -13,6 +17,11 @@ scope {
     rego = <<-EOT
             package enforcepolicy
             
-            default evaluate := true
+            default evaluate := false
+            
+            evaluate if { 
+                input.Environment.Name == "Production"
+                input.Project.Slug in ["<project-slug>", "<project-slug2>"]
+            }
             EOT
 }
