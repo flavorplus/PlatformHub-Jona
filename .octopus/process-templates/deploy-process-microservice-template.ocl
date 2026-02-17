@@ -22,6 +22,14 @@ parameter "db-connection-string" {
     label = "Database Connection String"
 }
 
+parameter "target-tag" {
+    display_settings = {
+        Octopus.ControlType = "AmazonWebServicesAccount"
+    }
+    help_text = "Provide the target tag for the deployment targets."
+    label = "Target Tag"
+}
+
 parameter "email-subject" {
     display_settings = {
         Octopus.ControlType = "SingleLineText"
@@ -48,6 +56,7 @@ parameter "email-to" {
 
 step "update-database" {
     name = "Update database"
+    target_roles = ["#{target-tag}"]
 
     action {
         action_type = "Octopus.Script"
@@ -85,6 +94,7 @@ step "update-database" {
 
 step "create-namespace" {
     name = "Create namespace if doesn't exist"
+    target_roles = ["#{target-tag}"]
 
     action {
         action_type = "Octopus.Script"
@@ -108,6 +118,7 @@ step "create-namespace" {
 step "deploy-microservice" {
     name = "Deploy microservice"
     condition = "Success"
+    target_roles = ["#{target-tag}"]
 
     action {
         action_type = "Octopus.KubernetesDeployRawYaml"
