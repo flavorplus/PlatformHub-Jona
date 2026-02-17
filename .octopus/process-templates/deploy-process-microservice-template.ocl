@@ -1,0 +1,159 @@
+name = "Deploy process - Microservice template"
+description = "Process template that will run a database update script, deploy a container, and send a slack notification."
+
+icon {
+    color = "#145586"
+    id = "rocket"
+}
+
+parameter "db-package" {
+    display_settings = {
+        Octopus.ControlType = "Package"
+    }
+    help_text = "Provide a Package with one or more SQL scripts to execute."
+    label = "Database Package"
+}
+
+parameter "db-connection-string" {
+    display_settings = {
+        Octopus.ControlType = "SingleLineText"
+    }
+    help_text = "Provide a database connection string."
+    label = "Database Connection String"
+}
+
+parameter "email-subject" {
+    display_settings = {
+        Octopus.ControlType = "SingleLineText"
+    }
+    help_text = "Provide an email notification subject. "
+    label = "Email Notification - Subject"
+}
+
+parameter "email-body" {
+    display_settings = {
+        Octopus.ControlType = "MultiLineText"
+    }
+    help_text = "Provide the email notification body. "
+    label = "Email Notification - Body"
+}
+
+step "update-database" {
+    name = "Update database"
+
+    action {
+        action_type = "Octopus.Script"
+        properties = {
+            Octopus.Action.RunOnServer = "false"
+            Octopus.Action.Script.ScriptBody = <<-EOT
+                # Updating database
+                
+                Write-Host "Executing database update script"
+                Write-Host "db-client run database=$OctopusParameters["db-connection-string"] $OctopusParameters["Octopus.Action.Package[db-package].ExtractedPath"]/*.sql"
+                
+                EOT
+            Octopus.Action.Script.ScriptSource = "Inline"
+            Octopus.Action.Script.Syntax = "PowerShell"
+            OctopusUseBundledTooling = "False"
+        }
+        worker_pool_variable = ""
+
+        packages "db-package" {
+            acquisition_location = "Server"
+            feed = "octopus-server-built-in"
+            package_id = ""
+            properties = {
+                Extract = "True"
+                PackageParameterName = "db-package"
+                Purpose = ""
+                SelectionMode = "deferred"
+            }
+        }
+    }
+}
+
+step "create-namespace" {
+    name = "Create namespace if doesn't exist"
+
+    action {
+        action_type = "Octopus.Script"
+        properties = {
+            Octopus.Action.RunOnServer = "false"
+            Octopus.Action.Script.ScriptBody = "kubectl create namespace '$OctopusParameters[\"Octopus.Project.Name\"]-$OctopusParameters[\"Octopus.Environment.Name\"]'"
+            Octopus.Action.Script.ScriptSource = "Inline"
+            Octopus.Action.Script.Syntax = "PowerShell"
+            OctopusUseBundledTooling = "False"
+        }
+        worker_pool_variable = ""
+    }
+}
+
+step "deploy-microservice" {
+    name = "Deploy microservice"
+
+    action {
+        action_type = "Octopus.KubernetesDeployRawYaml"
+        properties = {
+            Octopus.Action.Kubernetes.DeploymentTimeout = "180"
+            Octopus.Action.Kubernetes.ResourceStatusCheck = "True"
+            Octopus.Action.Kubernetes.ServerSideApply.Enabled = "True"
+            Octopus.Action.Kubernetes.ServerSideApply.ForceConflicts = "True"
+            Octopus.Action.KubernetesContainers.CustomResourceYaml = <<-EOT
+                ---
+                # website::tag::1:: Deploy the training/webapp Docker Container: https://hub.docker.com/r/training/webapp/
+                apiVersion: apps/v1
+                kind: Deployment
+                metadata:
+                  name: hello-world-deployment
+                spec:
+                  selector:
+                    matchLabels:
+                      app: hello-world
+                  replicas: 1
+                  template:
+                    metadata:
+                      labels:
+                        app: hello-world
+                    spec:
+                      containers:
+                        # website::tag::2:: The container runs a Python webapp on port 5000 that responds with "Hello, World!"
+                        - name: hello-world
+                          image: training/webapp:latest
+                          ports:
+                            - containerPort: 5000
+                ---
+                # website::tag::3:: Expose the Python webapp on port 5000 via a Kubernetes LoadBalancer.
+                kind: Service
+                apiVersion: v1
+                metadata:
+                  name: hello-world-service
+                spec:
+                  selector:
+                    app: hello-world
+                  ports:
+                    - protocol: TCP
+                      targetPort: 5000
+                      port: 5000
+                  type: LoadBalancer
+                EOT
+            Octopus.Action.KubernetesContainers.Namespace = "#{Octopus.Project.Name}-#{Octopus.Environment.Name}"
+            Octopus.Action.Package.JsonConfigurationVariablesTargets = "**/*.{yml,yaml}"
+            Octopus.Action.Script.ScriptSource = "Inline"
+        }
+        worker_pool_variable = ""
+    }
+}
+
+step "notify-team" {
+    name = "Notify team"
+
+    action {
+        action_type = "Octopus.Email"
+        properties = {
+            Octopus.Action.Email.Body = "#{email-body}"
+            Octopus.Action.Email.Subject = "#{email-subject}"
+            Octopus.Action.Email.To = "platform-team@octopus.com"
+        }
+        worker_pool_variable = ""
+    }
+}
