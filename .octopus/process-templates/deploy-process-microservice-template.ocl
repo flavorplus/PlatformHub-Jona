@@ -38,6 +38,14 @@ parameter "email-body" {
     label = "Email Notification - Body"
 }
 
+parameter "email-to" {
+    display_settings = {
+        Octopus.ControlType = "SingleLineText"
+    }
+    help_text = "Provide the email recipient address."
+    label = "Email Notification - Recipient"
+}
+
 step "update-database" {
     name = "Update database"
 
@@ -47,10 +55,13 @@ step "update-database" {
             Octopus.Action.RunOnServer = "false"
             Octopus.Action.Script.ScriptBody = <<-EOT
                 # Updating database
-                
+
+                $connectionString = $OctopusParameters["db-connection-string"]
+                $extractedPath = $OctopusParameters["Octopus.Action.Package[db-package].ExtractedPath"]
+
                 Write-Host "Executing database update script"
-                Write-Host "db-client run database=$OctopusParameters["db-connection-string"] $OctopusParameters["Octopus.Action.Package[db-package].ExtractedPath"]/*.sql"
-                
+                Write-Host "db-client run database=$connectionString $extractedPath/*.sql"
+
                 EOT
             Octopus.Action.Script.ScriptSource = "Inline"
             Octopus.Action.Script.Syntax = "PowerShell"
@@ -79,7 +90,13 @@ step "create-namespace" {
         action_type = "Octopus.Script"
         properties = {
             Octopus.Action.RunOnServer = "false"
-            Octopus.Action.Script.ScriptBody = "kubectl create namespace '$OctopusParameters[\"Octopus.Project.Name\"]-$OctopusParameters[\"Octopus.Environment.Name\"]'"
+            Octopus.Action.Script.ScriptBody = <<-EOT
+                $namespace = "#{Octopus.Project.Name}-#{Octopus.Environment.Name}"
+
+                Write-Host "Ensuring namespace '$namespace' exists"
+                kubectl create namespace $namespace --dry-run=client -o yaml | kubectl apply -f -
+
+                EOT
             Octopus.Action.Script.ScriptSource = "Inline"
             Octopus.Action.Script.Syntax = "PowerShell"
             OctopusUseBundledTooling = "False"
@@ -90,6 +107,7 @@ step "create-namespace" {
 
 step "deploy-microservice" {
     name = "Deploy microservice"
+    condition = "Success"
 
     action {
         action_type = "Octopus.KubernetesDeployRawYaml"
@@ -100,7 +118,6 @@ step "deploy-microservice" {
             Octopus.Action.Kubernetes.ServerSideApply.ForceConflicts = "True"
             Octopus.Action.KubernetesContainers.CustomResourceYaml = <<-EOT
                 ---
-                # website::tag::1:: Deploy the training/webapp Docker Container: https://hub.docker.com/r/training/webapp/
                 apiVersion: apps/v1
                 kind: Deployment
                 metadata:
@@ -116,13 +133,11 @@ step "deploy-microservice" {
                         app: hello-world
                     spec:
                       containers:
-                        # website::tag::2:: The container runs a Python webapp on port 5000 that responds with "Hello, World!"
                         - name: hello-world
                           image: training/webapp:latest
                           ports:
                             - containerPort: 5000
                 ---
-                # website::tag::3:: Expose the Python webapp on port 5000 via a Kubernetes LoadBalancer.
                 kind: Service
                 apiVersion: v1
                 metadata:
@@ -146,13 +161,14 @@ step "deploy-microservice" {
 
 step "notify-team" {
     name = "Notify team"
+    condition = "Always"
 
     action {
         action_type = "Octopus.Email"
         properties = {
             Octopus.Action.Email.Body = "#{email-body}"
             Octopus.Action.Email.Subject = "#{email-subject}"
-            Octopus.Action.Email.To = "platform-team@octopus.com"
+            Octopus.Action.Email.To = "#{email-to}"
         }
         worker_pool_variable = ""
     }
